@@ -1,55 +1,43 @@
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-import aiohttp
+from fastapi import FastAPI
+from pydantic import BaseModel
+import sqlite3
+from datetime import datetime
 
-API_URL = "https://<ТВОЙ-АДРЕС-НА-CYCLIC>/results/"  # ← сюда вставь адрес своего API
-BOT_TOKEN = "твой_токен_бота"
+app = FastAPI()
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+# модель запроса для сохранения результата
+class SpeedTestResult(BaseModel):
+    user_id: str
+    download_speed: float
+    upload_speed: float
+    ping: float
 
-# Кнопочная клавиатура
-keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-keyboard.add(KeyboardButton("🚀 Сделать замер"))
-keyboard.add(KeyboardButton("📊 Мои замеры"))
-keyboard.add(KeyboardButton("🔄 Обновить"))
+# endpoint для сохранения результата
+@app.post("/results/")
+def add_result(result: SpeedTestResult):
+    conn = sqlite3.connect("speedtest.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO results (user_id, download_speed, upload_speed, ping, timestamp) VALUES (?, ?, ?, ?, ?)",
+                   (result.user_id, result.download_speed, result.upload_speed, result.ping, datetime.now()))
+    conn.commit()
+    conn.close()
+    return {"message": "Результат сохранён ✅"}
 
-@dp.message(commands=["start"])
-async def cmd_start(message: types.Message):
-    await message.answer("Привет! Я бот для проверки скорости интернета 📡\n\nВыбери действие на клавиатуре ниже:", reply_markup=keyboard)
-
-@dp.message(lambda message: message.text == "📊 Мои замеры")
-async def get_results(message: types.Message):
-    user_id = str(message.from_user.id)
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(API_URL + user_id) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    text = "📊 Твои последние замеры:\n\n"
-                    for result in data:
-                        text += (f"🔻 Download: {result['download_speed']} Mbps\n"
-                                 f"🔺 Upload: {result['upload_speed']} Mbps\n"
-                                 f"📶 Ping: {result['ping']} ms\n"
-                                 f"🕒 {result['timestamp']}\n"
-                                 f"--------------------\n")
-                    await message.answer(text)
-                else:
-                    await message.answer("Ошибка при получении данных с сервера 😢")
-    except Exception as e:
-        await message.answer(f"Ошибка: {e}")
-
-@dp.message(lambda message: message.text == "🔄 Обновить")
-async def refresh_results(message: types.Message):
-    await get_results(message)
-
-@dp.message(lambda message: message.text == "🚀 Сделать замер")
-async def start_speedtest(message: types.Message):
-    await message.answer("🚀 Запускаю замер скорости...\nОжидаю данные от приложения 📡")
-
-async def main():
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# endpoint для получения последних 5 замеров пользователя
+@app.get("/results/{user_id}")
+def get_results(user_id: str):
+    conn = sqlite3.connect("speedtest.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT download_speed, upload_speed, ping, timestamp FROM results WHERE user_id=? ORDER BY timestamp DESC LIMIT 5", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    results = [
+        {
+            "download_speed": row[0],
+            "upload_speed": row[1],
+            "ping": row[2],
+            "timestamp": row[3]
+        }
+        for row in rows
+    ]
+    return results
